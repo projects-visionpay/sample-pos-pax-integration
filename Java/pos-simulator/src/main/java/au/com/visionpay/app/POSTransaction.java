@@ -14,5 +14,9 @@ public class POSTransaction {
         this.transactionCurrency = transactionCurrency;
         this.processType = processType;
     }
+
+    public int getProcessType(){
+        return processType;
+    }
     
 }

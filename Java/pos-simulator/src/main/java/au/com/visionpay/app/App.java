@@ -46,9 +46,13 @@ public class App
         while (true) {
             System.out.println("\nSelect operation:");
             System.out.println("1. Process Payment");
-            System.out.println("2. Process Magnetic Card");
-            System.out.println("3. Process Receipt");
-            System.out.println("4. Exit");
+            System.out.println("2. Process Pre-authorisation");
+            System.out.println("3. Capture Pre-authorisation");
+            System.out.println("4. Reverse Pre-authorisation");
+            System.out.println("5. Process Refund");
+            System.out.println("6. Process Magnetic Card");
+            System.out.println("7. Process Receipt");
+            System.out.println("8. Exit");
 
             int choice = scanner.nextInt();
             switch (choice) {
@@ -56,12 +60,24 @@ public class App
                     processPayment();
                     break;
                 case 2:
-                    processMagneticCard();
+                    processPreAuth();
                     break;
                 case 3:
-                    processReceipt();
+                    captureTransaction();
                     break;
                 case 4:
+                    reverseTransaction();
+                    break;
+                case 5:
+                    processRefund();
+                    break;
+                case 6:
+                    processMagneticCard();
+                    break;
+                case 7:
+                    processReceipt();
+                    break;
+                case 8:
                     System.out.println("Exiting...");
                     selectedDevice.closePort();
                     System.exit(0);
@@ -135,6 +151,29 @@ public class App
         System.out.println("Enter transaction amount (integer, without decimal places, e.g.: $10.51 = 1051): ");
         int amount = scanner.nextInt();
 
+        POSTransaction transaction = new POSTransaction(ExternalDeviceToken, ++transactionId, amount, currecy, 5);
+        String jsonTransaction = gson.toJson(transaction);
+
+        // Send the JSON to the terminal
+        sendDataToTerminal(jsonTransaction);
+
+        // Receive response from the terminal
+        InitiateTransaction initiateTransaction = receiveInitiateTransaction();
+
+        // Handle the transaction based on the state
+        if (initiateTransaction.getState() == 1) {
+            // Proceed with transaction
+            handleTransactionMessages(initiateTransaction.getExternalReference(), transaction.getProcessType());
+        } else {
+            System.out.println("Transaction rejected: " + initiateTransaction.getErrorMessage());
+        }
+    }
+
+    private static void processPreAuth() {
+        Scanner scanner = new Scanner(System.in);
+        System.out.println("Enter transaction amount (integer, without decimal places, e.g.: $10.51 = 1051): ");
+        int amount = scanner.nextInt();
+
         POSTransaction transaction = new POSTransaction(ExternalDeviceToken, ++transactionId, amount, currecy, 0);
         String jsonTransaction = gson.toJson(transaction);
 
@@ -147,16 +186,41 @@ public class App
         // Handle the transaction based on the state
         if (initiateTransaction.getState() == 1) {
             // Proceed with transaction
-            handleTransactionMessages(initiateTransaction.getExternalReference());
+            handleTransactionMessages(initiateTransaction.getExternalReference(), transaction.getProcessType());
         } else {
             System.out.println("Transaction rejected: " + initiateTransaction.getErrorMessage());
         }
     }
 
-    private static void captureTransaction(int externalReference, int amount) {
-        System.out.println("Capturing Transaction...");
+    private static void processRefund() {
+        Scanner scanner = new Scanner(System.in);
+        System.out.println("Enter transaction amount (integer, without decimal places, e.g.: $10.51 = 1051): ");
+        int amount = scanner.nextInt();
 
-        POSTransaction captureTransaction = new POSTransaction(ExternalDeviceToken, externalReference, amount, 0, 1);
+        POSTransaction transaction = new POSTransaction(ExternalDeviceToken, transactionId, amount, currecy, 6);
+        String jsonTransaction = gson.toJson(transaction);
+
+        // Send the JSON to the terminal
+        sendDataToTerminal(jsonTransaction);
+
+        // Receive response from the terminal
+        InitiateTransaction initiateTransaction = receiveInitiateTransaction();
+
+        // Handle the transaction based on the state
+        if (initiateTransaction.getState() == 1) {
+            // Proceed with transaction
+            handleTransactionMessages(initiateTransaction.getExternalReference(), transaction.getProcessType());
+        } else {
+            System.out.println("Transaction rejected: " + initiateTransaction.getErrorMessage());
+        }
+    }
+
+    private static void captureTransaction() {
+        Scanner scanner = new Scanner(System.in);
+        System.out.println("Enter capturing amount (integer, without decimal places, e.g.: $10.51 = 1051): ");
+        int amount = scanner.nextInt();
+
+        POSTransaction captureTransaction = new POSTransaction(ExternalDeviceToken, transactionId, amount, 0, 1);
         String jsonCapture = gson.toJson(captureTransaction);
         sendDataToTerminal(jsonCapture);
 
@@ -164,7 +228,7 @@ public class App
         while (true) {
             VisionPayTransactionMessage message = receiveVisionPayTransactionMessage();
 
-            if (!message.getExternalReference().equals(String.valueOf(externalReference))) {
+            if (!message.getExternalReference().equals(String.valueOf(transactionId))) {
                 continue;
             }
 
@@ -182,6 +246,45 @@ public class App
                     return;
                 case 9:
                     System.out.println("Capture Failed");
+                    return;
+                default:
+                    System.out.println("Cancelled (" + message.getIm30State() + ")");
+                    return;
+            }
+        }
+    }
+
+    private static void reverseTransaction() {
+        Scanner scanner = new Scanner(System.in);
+        System.out.println("Enter reversing amount (integer, without decimal places, e.g.: $10.51 = 1051): ");
+        int amount = scanner.nextInt();
+
+        POSTransaction captureTransaction = new POSTransaction(ExternalDeviceToken, transactionId, amount, 0, 2);
+        String jsonCapture = gson.toJson(captureTransaction);
+        sendDataToTerminal(jsonCapture);
+
+        // Await reverse confirmation
+        while (true) {
+            VisionPayTransactionMessage message = receiveVisionPayTransactionMessage();
+
+            if (!message.getExternalReference().equals(String.valueOf(transactionId))) {
+                continue;
+            }
+
+            switch (message.getIm30State()) {
+                case 0:
+                    break;
+                case 10:
+                    System.out.println("Sending Reversal...");
+                    break;
+                case 11:
+                    if(message.getTransactionStatus() == 1)
+                        System.out.println("Reversal Completed Successfully");
+                    else
+                        System.out.println("Reversal Failed");
+                    return;
+                case 12:
+                    System.out.println("Reversal Failed");
                     return;
                 default:
                     System.out.println("Cancelled (" + message.getIm30State() + ")");
@@ -287,7 +390,7 @@ public class App
         }
     }
 
-    private static void handleTransactionMessages(String externalReference) {
+    private static void handleTransactionMessages(String externalReference, int processType) {
         // Continuously listen for transaction messages
         while (true) {
             VisionPayTransactionMessage message = receiveVisionPayTransactionMessage();
@@ -310,14 +413,14 @@ public class App
                     System.out.println("Sending Online Complete");
                     break;
                 case 6:
-                    System.out.println("Pre-Authorization Complete");
-                    if (message.getTransactionStatus() == 1) {
+                    System.out.println((processType == 0 ? "Pre-Authorization" : (processType == 5 ? "Payment" : (processType == 6 ? "Refund" : ""))) + " Complete");
+                    /*if (message.getTransactionStatus() == 1) {
                         System.out.println("Transaction Approved");
                         // Proceed to capture
                         captureTransaction(Integer.parseInt(externalReference), message.getTransactionAmount());
                     } else {
                         System.out.println("Transaction Declined");
-                    }
+                    }*/
                     return;
                 default:
                     System.out.println("Failed State: " + message.getIm30State());
